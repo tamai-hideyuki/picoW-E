@@ -31,11 +31,17 @@ oled.text("Connected!", 0, 0)
 oled.text(ip, 0, 16)
 oled.show()
 
-html = """\
+html = f"""\
 HTTP/1.0 200 OK
 Content-Type: text/html
 
 <html>
+<style>
+    body {
+        background-color: black;
+        color: white;
+    }
+</style>
 <body>
     <h1>Hello!</h1>
     <h2>Hello!</h2>
