@@ -3,26 +3,32 @@ DASHBOARD = """\
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Env Monitor</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: sans-serif; background: #1a1a2e; color: #eee; padding: 16px; }
+  body { font-family: -apple-system, sans-serif; background: #1a1a2e; color: #eee;
+    padding: 16px; padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
   h1 { font-size: 1.4em; margin-bottom: 12px; color: #e94560; }
-  .cards { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
-  .card { background: #16213e; border-radius: 10px; padding: 16px; flex: 1; min-width: 120px; text-align: center; }
-  .card .value { font-size: 2em; font-weight: bold; }
+  .cards { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+  .card { background: #16213e; border-radius: 10px; padding: 14px 10px; flex: 1; min-width: 90px; text-align: center; }
+  .card .value { font-size: 1.8em; font-weight: bold; }
   .card.temp .value { color: #ff6b6b; }
   .card.humi .value { color: #4ecdc4; }
   .card.pres .value { color: #ffe66d; }
-  .card .label { font-size: 0.8em; color: #aaa; margin-top: 4px; }
-  .chart-box { background: #16213e; border-radius: 10px; padding: 16px; margin-bottom: 16px; }
-  .controls { margin-bottom: 12px; }
-  .controls button { background: #e94560; color: #fff; border: none; padding: 8px 16px;
-    border-radius: 6px; margin-right: 8px; cursor: pointer; font-size: 0.9em; }
+  .card .label { font-size: 0.75em; color: #aaa; margin-top: 4px; }
+  .chart-box { background: #16213e; border-radius: 10px; padding: 12px; margin-bottom: 12px; }
+  .controls { display: flex; gap: 8px; margin-bottom: 12px; }
+  .controls button { background: #e94560; color: #fff; border: none; padding: 10px 0;
+    border-radius: 6px; cursor: pointer; font-size: 0.9em; flex: 1; }
   .controls button.active { background: #0f3460; }
   .info { font-size: 0.75em; color: #666; margin-top: 8px; }
+  @media (max-width: 480px) {
+    .card .value { font-size: 1.5em; }
+    .card .label { font-size: 0.7em; }
+    .chart-box { padding: 8px; }
+  }
 </style>
 </head>
 <body>
