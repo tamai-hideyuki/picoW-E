@@ -1,6 +1,7 @@
 import socket
 import time
 import json
+import gc
 import config
 import data_store
 from html_template import DASHBOARD
@@ -28,39 +29,73 @@ def _parse_query(path):
     return path, params
 
 
-def _json_response(data):
-    body = json.dumps(data)
-    return (
-        "HTTP/1.0 200 OK\r\n"
-        "Content-Type: application/json\r\n"
-        "Access-Control-Allow-Origin: *\r\n"
-        "\r\n" + body
-    )
-
-
-def _html_response(body):
-    return (
-        "HTTP/1.0 200 OK\r\n"
-        "Content-Type: text/html; charset=utf-8\r\n"
-        "\r\n" + body
-    )
-
-
 def _format_time(ts):
     t = time.localtime(ts + config.TZ_OFFSET)
     return "{:02d}:{:02d}".format(t[3], t[4])
 
 
+def _send_json(conn, data):
+    """JSONレスポンスを送信（小さいデータ向け）"""
+    body = json.dumps(data)
+    conn.send("HTTP/1.0 200 OK\r\n"
+              "Content-Type: application/json\r\n"
+              "Connection: close\r\n"
+              "Access-Control-Allow-Origin: *\r\n\r\n")
+    conn.send(body)
+
+
+def _send_html(conn, body):
+    """HTMLレスポンスをチャンク送信"""
+    conn.send("HTTP/1.0 200 OK\r\n"
+              "Content-Type: text/html; charset=utf-8\r\n"
+              "Connection: close\r\n\r\n")
+    # 大きいHTMLを512バイトずつ送信（メモリ節約）
+    mv = memoryview(body.encode("utf-8") if isinstance(body, str) else body)
+    chunk = 512
+    for i in range(0, len(mv), chunk):
+        conn.send(mv[i:i + chunk])
+
+
+def _send_history_json(conn, range_val, source, records):
+    """履歴データをストリーミングJSON送信（巨大リストのjson.dumpsを回避）"""
+    conn.send("HTTP/1.0 200 OK\r\n"
+              "Content-Type: application/json\r\n"
+              "Connection: close\r\n"
+              "Access-Control-Allow-Origin: *\r\n\r\n")
+    conn.send('{"range":"')
+    conn.send(range_val)
+    conn.send('","source":"')
+    conn.send(source)
+    conn.send('","data":[')
+
+    first = True
+    for r in records:
+        t = _format_time(r[0])
+        line = '["{}",{},{},{}]'.format(t, r[1], r[2], r[3])
+        if first:
+            first = False
+        else:
+            conn.send(",")
+        conn.send(line)
+
+    conn.send("]}")
+
+
 class Server:
     def __init__(self, sensor):
         self.sensor = sensor
+        self._request_count = 0
 
-    def _handle_api_current(self):
+    def _handle_api_current(self, conn):
         entry = self.sensor.current()
-        data = {"timestamp": entry[0], "temp": entry[1], "humi": entry[2], "pres": entry[3]}
-        return _json_response(data)
+        _send_json(conn, {
+            "timestamp": entry[0],
+            "temp": entry[1],
+            "humi": entry[2],
+            "pres": entry[3],
+        })
 
-    def _handle_api_history(self, params):
+    def _handle_api_history(self, conn, params):
         range_val = params.get("range", "24h")
 
         if range_val == "10m":
@@ -77,23 +112,22 @@ class Server:
             records = data_store.load_records()
             source = "file"
 
-        data = [[_format_time(r[0]), r[1], r[2], r[3]] for r in records]
-        return _json_response({"range": range_val, "source": source, "data": data})
+        _send_history_json(conn, range_val, source, records)
 
-    def _handle_api_status(self):
+    def _handle_api_status(self, conn):
         files = data_store.list_data_files()
         usage = data_store.disk_usage()
-        data = {
+        _send_json(conn, {
             "files": files,
             "disk_bytes": usage,
-            "buffer_len": len(self.sensor.buffer),
+            "buffer_len": self.sensor.buffer_len(),
+            "free_mem": gc.mem_free(),
             "uptime": time.time(),
-        }
-        return _json_response(data)
+        })
 
     def handle(self, conn):
         try:
-            conn.settimeout(3)
+            conn.settimeout(2)
             data = conn.recv(1024).decode("utf-8")
             if not data:
                 return
@@ -101,19 +135,20 @@ class Server:
             path, params = _parse_query(raw_path)
 
             if path == "/api/current":
-                response = self._handle_api_current()
+                self._handle_api_current(conn)
             elif path == "/api/history":
-                response = self._handle_api_history(params)
+                self._handle_api_history(conn, params)
             elif path == "/api/status":
-                response = self._handle_api_status()
+                self._handle_api_status(conn)
             elif path == "/favicon.ico":
-                response = "HTTP/1.0 204 No Content\r\n\r\n"
+                conn.send("HTTP/1.0 204 No Content\r\nConnection: close\r\n\r\n")
             else:
-                response = _html_response(DASHBOARD)
-
-            conn.sendall(response)
+                _send_html(conn, DASHBOARD)
         except Exception:
-            pass
+            try:
+                conn.send("HTTP/1.0 500 Error\r\nConnection: close\r\n\r\n")
+            except Exception:
+                pass
         finally:
             try:
                 conn.close()
@@ -130,8 +165,18 @@ class Server:
         print("HTTP Server started on port", config.SERVER_PORT)
 
     def handle_one(self):
-        try:
-            conn, addr = self._sock.accept()
+        """保留中の接続をまとめて処理する（最大4件）"""
+        handled = 0
+        for _ in range(4):
+            try:
+                conn, _ = self._sock.accept()
+            except OSError:
+                break
             self.handle(conn)
-        except OSError:
-            pass
+            handled += 1
+
+        self._request_count += handled
+        # 5リクエストごとにGC実行
+        if handled > 0 and self._request_count >= 5:
+            gc.collect()
+            self._request_count = 0

@@ -78,6 +78,9 @@ def main():
     gc.collect()
     print("Free mem:", gc.mem_free())
 
+    gc_interval = 30  # 30秒ごとに強制GC
+    last_gc = time.time()
+
     while True:
         srv.handle_one()
 
@@ -85,5 +88,11 @@ def main():
             data_store.save_record(*sensor.pending_aggregate)
             sensor.pending_aggregate = None
             gc.collect()
+            last_gc = time.time()
+
+        now = time.time()
+        if now - last_gc >= gc_interval:
+            gc.collect()
+            last_gc = now
 
 main()

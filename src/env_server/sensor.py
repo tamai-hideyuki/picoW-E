@@ -8,7 +8,10 @@ class Sensor:
     def __init__(self):
         i2c = I2C(0, sda=Pin(config.I2C_SDA_PIN), scl=Pin(config.I2C_SCL_PIN))
         self.bme = bme280.BME280(i2c=i2c)
-        self.buffer = []
+        # 固定長リングバッファ（pop(0)を避けてO(1)で回す）
+        self._ring = [None] * config.RING_BUFFER_SIZE
+        self._ring_idx = 0
+        self._ring_count = 0
         self.aggregate_acc = []
         self.last_aggregate_time = time.time()
         self.pending_aggregate = None
@@ -33,9 +36,10 @@ class Sensor:
             temp, humi, pres = result
             entry = (now, temp, humi, pres)
 
-            self.buffer.append(entry)
-            if len(self.buffer) > config.RING_BUFFER_SIZE:
-                self.buffer.pop(0)
+            self._ring[self._ring_idx] = entry
+            self._ring_idx = (self._ring_idx + 1) % config.RING_BUFFER_SIZE
+            if self._ring_count < config.RING_BUFFER_SIZE:
+                self._ring_count += 1
 
             self.aggregate_acc.append(entry)
 
@@ -66,9 +70,19 @@ class Sensor:
     def stop(self):
         self._timer.deinit()
 
+    def _iter_buffer(self):
+        """リングバッファを古い順にイテレートする"""
+        if self._ring_count < config.RING_BUFFER_SIZE:
+            start = 0
+        else:
+            start = self._ring_idx
+        for i in range(self._ring_count):
+            yield self._ring[(start + i) % config.RING_BUFFER_SIZE]
+
     def current(self):
-        if self.buffer:
-            return self.buffer[-1]
+        if self._ring_count > 0:
+            last_idx = (self._ring_idx - 1) % config.RING_BUFFER_SIZE
+            return self._ring[last_idx]
         now = time.time()
         result = self.read()
         if result is None:
@@ -77,4 +91,7 @@ class Sensor:
 
     def recent(self, seconds=600):
         cutoff = time.time() - seconds
-        return [e for e in self.buffer if e[0] >= cutoff]
+        return [e for e in self._iter_buffer() if e[0] >= cutoff]
+
+    def buffer_len(self):
+        return self._ring_count
